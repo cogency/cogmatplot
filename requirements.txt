@@ -1,0 +1,8 @@
+numpy
+matplotlib
+pyzmq
+screeninfo
+opencv-python
+PyQt5
+pyvista
+pyvistaqt

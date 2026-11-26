@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cogmatplot"
+version = "0.1.0"
+description = "MATLAB-style 2D and 3D figures, inline or on another monitor"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Cogency", email = "mathew@cogency.co.za" }]
+dependencies = [
+    "numpy",
+    "matplotlib",
+    "pyzmq",
+    "screeninfo",
+    "opencv-python",
+    "PyQt5",
+    "pyvista",
+    "pyvistaqt",
+]
+
+[project.scripts]
+cogmatplot-server = "cogmatplot.server:main"
+
+[tool.setuptools.packages.find]
+include = ["cogmatplot*"]
