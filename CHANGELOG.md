@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.0] - 2026-11-27
+
+### Added
+
+- 3D boxes: `box_corners`, `box_mesh`, `crop_box` (rotated box plus margins), and `plot_box`.
+- Quad faces in `plot_mesh`, `load_ply`, and `save_ply`.
+- `examples/box_crop.py`; README sections on boxes and direct PyVista access via `.pl`.
+
+### Fixed
+
+- Binary PLY faces load in one pass.
+- Inline 3D views accept 0-255 color tuples.
+
 ## [0.2.0] - 2026-11-27
 
 ### Added
@@ -29,5 +42,6 @@
 
 First release: `FigureManager` grid with matplotlib, OpenCV, and PyVista tiles on any monitor; Qt and inline modes; MATLAB-style helpers; debug server and client; `debug_views`; PLY load and save; examples.
 
+[0.3.0]: https://github.com/cogency/cogmatplot/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/cogency/cogmatplot/compare/0.1.0...0.2.0
 [0.1.0]: https://github.com/cogency/cogmatplot/releases/tag/0.1.0

@@ -177,6 +177,51 @@ fm.plot_mesh(0, 1, load_ply(data / "prism_mesh.ply"), style="both")
 
 `examples/ply_prism.py` loads the two sample files.
 
+## 3D boxes and cropping
+
+A box is 8 corners or axis-aligned bounds `(xmin, xmax, ymin, ymax, zmin, zmax)`. Corners 0-3 go round the bottom face, and corner `i + 4` sits above corner `i`. Boxes may be rotated.
+
+```python
+from cogmatplot.box3 import box_corners, box_mesh, crop_box
+
+box = bag_corners                          # (8, 3), or box_corners((0, 500, 0, 300, 0, 250))
+keep, grown = crop_box(points, box, margin_xy=(80, 10), margin_z=(0, 300))
+
+fm.plot3(0, 0, points[keep], colors=colors[keep])
+fm.plot_box(0, 0, box, color="blue")       # wireframe, line_width=1.5
+fm.plot_box(0, 0, grown, color="green")
+```
+
+`crop_box` works in the box's own axes, so a rotated box crops along its sides. `margin_xy=(mx, my)` is added on both sides of the long and short horizontal axes. `margin_z=(floor, ceiling)` grows the box down and up. A single number applies to both. `keep` is a boolean mask, so `points[keep]` and `colors[keep]` stay aligned, and `grown` is the grown box in the same corner order. `points` can also be a whole cloud structure.
+
+`box_mesh(box)` returns the box as a `Ply` with 6 quad faces. Pass it to `plot_mesh(..., style="surface")` for a solid box, or to `save_ply`.
+
+`examples/box_crop.py` draws a rotated box over a cloud, then the crop with the grown box.
+
+## Advanced: direct PyVista access
+
+`figure3(row, col)` returns the tile's 3D view. In Qt mode, `view.pl` is its pyvistaqt `BackgroundPlotter`, so any PyVista call works for things the helpers don't cover:
+
+```python
+import pyvista as pv
+
+view = fm.figure3(0, 0)
+pl = view.pl
+
+pl.add_points(points, scalars=colors, rgb=True, point_size=6, render_points_as_spheres=True)
+pl.add_mesh(pv.Sphere(radius=20, center=tag_xyz), color="red")
+pl.add_arrows(origins, normals, mag=30, color="orange")
+pl.add_point_labels(corners, [str(i) for i in range(8)], point_size=0, font_size=12)
+actor = pl.add_mesh(pv.PolyData(pts, faces), style="wireframe", color="green", line_width=2)
+pl.remove_actor(actor)
+pl.camera_position = "xz"
+pl.reset_camera()
+```
+
+`faces` in `pv.PolyData` are packed as `[n, i0, ..., i(n-1)]` per face. `view.pl` is `None` in inline mode and is not available through the server, so check it before use. PyVista calls are not recorded by the view: `clear()`, `hold=False`, reopening a closed window, and inline snapshots only redraw what went through `scatter3`, `plot3`, `plot_mesh`, and `plot_box`.
+
+For 2D tiles, `fm.subplot(row, col)` hands out the matplotlib axes in the same way.
+
 ## Server
 
 The server owns the windows. A debugger, or any other process, sends the same calls.
@@ -208,6 +253,7 @@ draw(fm)
 | `examples/debug_client.py` | Plot into the server |
 | `examples/scene.py` | The shared 2×2 scene used above |
 | `examples/ply_prism.py` | PLY point cloud, wireframe, and shaded mesh |
+| `examples/box_crop.py` | 3D box over a cloud, and cropping to a box with margins |
 
 ## Tests
 

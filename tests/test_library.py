@@ -286,6 +286,11 @@ class TestDebugViews(unittest.TestCase):
         self.assertIsNone(view._feeds["people.mask"])
 
 
+def _assert_3d_tile(case, ax):
+    # A PyVista snapshot lands on a flat axes; without PyVista it falls back to 3D axes.
+    case.assertTrue(ax.name == "3d" or ax.images, f"tile is {ax.name} with no snapshot")
+
+
 class TestPly(unittest.TestCase):
     def test_prism_files_roundtrip(self):
         from cogmatplot.ply import load_ply, rectangular_prism, save_ply
@@ -333,7 +338,7 @@ class TestPly(unittest.TestCase):
                 layer = fm._cells[key].cloud.layers[0]
                 self.assertEqual(layer["kind"], "mesh")
                 self.assertEqual(layer["style"], style)
-                self.assertEqual(fm._axes[key[0]][key[1]].name, "3d")
+                _assert_3d_tile(self, fm._axes[key[0]][key[1]])
         finally:
             fm.closeAll()
 
@@ -414,6 +419,103 @@ class TestPly(unittest.TestCase):
             self.assertEqual(np.asarray(layer["faces"]).shape, (12, 3))
         finally:
             fm.closeAll()
+
+
+def _yaw(points, degrees):
+    a = np.radians(degrees)
+    rot = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+    return np.asarray(points) @ rot.T
+
+
+class TestBox(unittest.TestCase):
+    def test_corners_from_bounds_bottom_then_top(self):
+        from cogmatplot.box3 import BOX_FACES, box_corners, box_mesh
+
+        corners = box_corners((0, 4, 0, 2, 0, 1))
+        self.assertEqual(corners.shape, (8, 3))
+        np.testing.assert_array_equal(corners[:4, 2], 0)
+        np.testing.assert_array_equal(corners[4:, 2], 1)
+        np.testing.assert_array_equal(corners[4:, :2], corners[:4, :2])
+        np.testing.assert_array_equal(box_corners(corners), corners)
+        mesh = box_mesh(corners)
+        self.assertEqual(mesh.faces.shape, (6, 4))
+        np.testing.assert_array_equal(mesh.faces, BOX_FACES)
+        with self.assertRaises(ValueError):
+            box_corners([1, 2, 3])
+
+    def test_crop_axis_aligned_with_margins(self):
+        from cogmatplot.box3 import box_corners, crop_box
+
+        box = (0, 100, 0, 50, 0, 20)
+        pts = np.array([
+            [50, 25, 10],
+            [-30, 25, 10],
+            [-50, 25, 10],
+            [50, -10, 10],
+            [50, -30, 10],
+            [50, 25, -5],
+            [50, 25, 150],
+            [50, 25, 200],
+        ], dtype=float)
+        keep, grown = crop_box(pts, box, margin_xy=(40, 20), margin_z=(10, 150))
+        np.testing.assert_array_equal(keep, [True, True, False, True, False, True, True, False])
+        lo, hi = grown.min(axis=0), grown.max(axis=0)
+        np.testing.assert_allclose(lo, [-40, -20, -10], atol=1e-9)
+        np.testing.assert_allclose(hi, [140, 70, 170], atol=1e-9)
+        keep_plain, same = crop_box(pts, box)
+        np.testing.assert_array_equal(keep_plain, [True, False, False, False, False, False, False, False])
+        np.testing.assert_allclose(same, box_corners(box), atol=1e-9)
+
+    def test_crop_rotated_box_keeps_corner_order(self):
+        from cogmatplot.box3 import box_corners, crop_box
+
+        local = box_corners((-100, 100, -40, 40, 0, 60))
+        box = _yaw(local, 30) + [500, 200, 0]
+        inside = _yaw([[90, 35, 30], [-90, -35, 55]], 30) + [500, 200, 0]
+        outside = _yaw([[110, 0, 30], [0, 70, 30]], 30) + [500, 200, 0]
+        margin = _yaw([[0, 50, 30]], 30) + [500, 200, 0]
+        keep, grown = crop_box(np.vstack([inside, outside, margin]), box, margin_xy=(0, 20))
+        np.testing.assert_array_equal(keep, [True, True, False, False, True])
+        expected = _yaw(box_corners((-100, 100, -60, 60, 0, 60)), 30) + [500, 200, 0]
+        np.testing.assert_allclose(grown, expected, atol=1e-6)
+
+    def test_crop_takes_cloud_structures(self):
+        from cogmatplot.box3 import crop_box
+        from cogmatplot.ply import load_ply
+
+        cloud = load_ply(ROOT / "examples" / "data" / "prism_cloud.ply")
+        keep, _ = crop_box(cloud, (0, 105, -1, 200, -1, 200))
+        np.testing.assert_array_equal(keep, cloud.points[:, 0] <= 105)
+
+    def test_plot_box_draws_quads_inline(self):
+        fm = FigureManager(1, 1, pause=False, mode="inline")
+        try:
+            view = fm.plot_box(0, 0, (0, 4, 0, 2, 0, 1))
+            fm.plot_box(0, 0, (-1, 5, -1, 3, 0, 2), color=(0, 200, 0))
+            fm.drawnow()
+            layers = view.layers
+            self.assertEqual(len(layers), 2)
+            self.assertEqual(layers[0]["kind"], "mesh")
+            self.assertEqual(layers[0]["style"], "wireframe")
+            self.assertEqual(np.asarray(layers[0]["faces"]).shape, (6, 4))
+            _assert_3d_tile(self, fm._axes[0][0])
+        finally:
+            fm.closeAll()
+
+    def test_quad_faces_roundtrip(self):
+        import tempfile
+
+        from cogmatplot.box3 import box_mesh
+        from cogmatplot.ply import as_ply, load_ply, save_ply
+
+        mesh = box_mesh((0, 4, 0, 2, 0, 1))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "box.ply"
+            save_ply(path, mesh.points, faces=mesh.faces)
+            again = load_ply(path)
+        np.testing.assert_array_equal(again.faces, mesh.faces)
+        np.testing.assert_allclose(again.points, mesh.points)
+        self.assertEqual(as_ply({"points": mesh.points, "faces": mesh.faces}).faces.shape, (6, 4))
 
 
 class TestServer(unittest.TestCase):
@@ -505,10 +607,12 @@ class TestServer(unittest.TestCase):
                 warnings.simplefilter("ignore", RuntimeWarning)
                 client.plot3(0, 0, abd, point_size=4)
                 client.plot_mesh(0, 1, mesh, style="wireframe")
+                client.figure3(0, 1).plot_box((0, 100, 0, 60, 0, 40), color="green")
                 cells = {}
                 for _ in range(80):
                     cells = {key: fm._cells.get(key) for key in ((0, 0), (0, 1))}
-                    if all(cell is not None and cell.cloud is not None and cell.cloud.layers for cell in cells.values()):
+                    if all(cell is not None and cell.cloud is not None for cell in cells.values()) \
+                            and len(cells[(0, 0)].cloud.layers) >= 1 and len(cells[(0, 1)].cloud.layers) >= 2:
                         break
                     stop.wait(0.05)
             points_layer = cells[(0, 0)].cloud.layers[0]
@@ -517,6 +621,9 @@ class TestServer(unittest.TestCase):
             np.testing.assert_array_equal(points_layer["colors"], cloud.colors)
             mesh_layer = cells[(0, 1)].cloud.layers[0]
             self.assertEqual(np.asarray(mesh_layer["faces"]).shape, (12, 3))
+            box_layer = cells[(0, 1)].cloud.layers[1]
+            self.assertEqual(np.asarray(box_layer["faces"]).shape, (6, 4))
+            self.assertEqual(box_layer["style"], "wireframe")
         finally:
             client.close()
             stop.set()

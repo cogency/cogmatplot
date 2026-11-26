@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "cogmatplot"
-version = "0.2.0"
+version = "0.3.0"
 description = "MATLAB-style 2D and 3D figures, inline or on another monitor"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -32,6 +32,9 @@ __all__ = [
     "save_ply",
     "as_ply",
     "rectangular_prism",
+    "box_corners",
+    "box_mesh",
+    "crop_box",
 ]
 
 
@@ -52,4 +55,8 @@ def __getattr__(name):
         from cogmatplot import ply
 
         return getattr(ply, name)
+    if name in ("box_corners", "box_mesh", "crop_box"):
+        from cogmatplot import box3
+
+        return getattr(box3, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

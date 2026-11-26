@@ -13,6 +13,7 @@ METHODS = (
     "plot3",
     "scatter3",
     "plot_mesh",
+    "plot_box",
     "figure3",
     "title",
     "xlabel",

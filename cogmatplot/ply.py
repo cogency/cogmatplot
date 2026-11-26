@@ -3,7 +3,7 @@
 Binary little-endian files are read with ``numpy.frombuffer`` after the
 header. That is the fast path: the vertex block is one array, not a Python
 loop. Vertex colors may be ``red/green/blue`` or ``diffuse_red/green/blue``.
-Faces are triangle lists (``property list uchar int vertex_indices``).
+Faces are triangle or quad lists (``property list uchar int vertex_indices``).
 """
 
 from __future__ import annotations
@@ -202,12 +202,15 @@ def _faces(faces):
         return None
     arr = np.asarray(faces)
     if arr.dtype == object:
-        arr = np.array([np.asarray(face)[:3] for face in arr], dtype=np.int64)
+        sizes = {len(face) for face in arr}
+        width = 4 if sizes == {4} else 3
+        arr = np.array([np.asarray(face)[:width] for face in arr], dtype=np.int64)
     if arr.size == 0:
         return None
     if arr.ndim != 2 or arr.shape[1] < 3:
         return None
-    return arr[:, :3].astype(np.int64, copy=False)
+    width = 4 if arr.shape[1] == 4 else 3
+    return arr[:, :width].astype(np.int64, copy=False)
 
 
 def save_ply(path: PathLike, points, colors=None, normals=None, faces=None) -> None:
@@ -241,10 +244,11 @@ def save_ply(path: PathLike, points, colors=None, normals=None, faces=None) -> N
         table["nx"], table["ny"], table["nz"] = norms[:, 0], norms[:, 1], norms[:, 2]
     chunks.append(table.tobytes())
     if tris is not None:
-        # One count byte plus three little-endian ints. No struct padding.
-        blob = np.empty((len(tris), 13), dtype=np.uint8)
-        blob[:, 0] = 3
-        blob[:, 1:] = np.ascontiguousarray(tris[:, :3], dtype="<i4").view(np.uint8).reshape(len(tris), 12)
+        # One count byte plus 3 or 4 little-endian ints per face. No struct padding.
+        width = 4 if tris.shape[1] == 4 else 3
+        blob = np.empty((len(tris), 1 + 4 * width), dtype=np.uint8)
+        blob[:, 0] = width
+        blob[:, 1:] = np.ascontiguousarray(tris[:, :width], dtype="<i4").view(np.uint8).reshape(len(tris), 4 * width)
         chunks.append(blob.tobytes())
     Path(path).write_bytes(b"".join(chunks))
 
@@ -401,17 +405,19 @@ def _read_faces(buf, cursor, element, endian):
         for i, face in enumerate(faces):
             out[i, :len(face)] = face
         consumed = sum(len(line) + 1 for line in lines[:count])
+        if width == 4 and all(len(face) == 4 for face in faces):
+            return out, cursor + consumed
         return out[:, :3] if width >= 3 else out, cursor + consumed
     count_size = np.dtype(count_dt).itemsize
     index_size = np.dtype(index_dt).itemsize
     first = int(np.frombuffer(buf, dtype=np.dtype(count_dt), count=1, offset=cursor)[0])
     stride = count_size + first * index_size
-    if cursor + count * stride <= len(buf):
-        counts = np.frombuffer(buf, dtype=np.dtype(count_dt), count=count, offset=cursor)
-        # Structured view only works when every face has the same vertex count.
-        if int(counts[0]) == first and np.all(counts == first):
-            raw = np.frombuffer(buf, dtype=np.uint8, count=count * stride, offset=cursor)
-            indices = raw.reshape(count, stride)[:, count_size:].copy().view(np.dtype(index_dt))
+    if count and cursor + count * stride <= len(buf):
+        # Fixed-stride rows only line up when every face has the same vertex count.
+        rows = np.frombuffer(buf, dtype=np.uint8, count=count * stride, offset=cursor).reshape(count, stride)
+        counts = rows[:, :count_size].copy().view(np.dtype(count_dt)).ravel()
+        if np.all(counts == first):
+            indices = rows[:, count_size:].copy().view(np.dtype(index_dt))
             indices = indices.reshape(count, first).astype(np.int64, copy=False)
             return indices, cursor + count * stride
     faces = []

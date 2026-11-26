@@ -29,7 +29,7 @@ from cogmatplot.images import prepare_bgr
 from cogmatplot.layout import gridfig_box
 from cogmatplot.mode import current_mode
 from cogmatplot.ply import is_cloud
-from cogmatplot.view3 import coerce_cloud
+from cogmatplot.view3 import coerce_cloud, mesh_faces
 
 _MANAGERS = weakref.WeakSet()
 
@@ -366,27 +366,36 @@ def _mesh_layer(ax, layer):
     from mpl_toolkits.mplot3d.art3d import Line3DCollection, Poly3DCollection
 
     pts = np.asarray(layer["points"], dtype=float)
-    faces = np.asarray(layer["faces"], dtype=int)[:, :3]
+    faces = mesh_faces(layer["faces"])
     style = str(layer.get("style") or "surface").lower()
-    color = layer.get("color") or "lightsteelblue"
-    tris = pts[faces]
+    color = _mpl_color(layer.get("color"))
+    polys = pts[faces]
+    had_data = bool(ax.collections)
     if style in ("surface", "both", "shaded"):
         edge = "black" if style == "both" else "none"
-        ax.add_collection3d(Poly3DCollection(tris, facecolor=color, edgecolor=edge, linewidths=0.4))
+        ax.add_collection3d(Poly3DCollection(polys, facecolor=color or "lightsteelblue", edgecolor=edge, linewidths=0.4))
     if style == "wireframe":
-        loops = [np.vstack((pts[tri], pts[tri[0]])) for tri in faces]
-        ax.add_collection3d(Line3DCollection(loops, colors="black", linewidths=0.8))
-    lo, hi = pts.min(axis=0), pts.max(axis=0)
-    ax.set_xlim(lo[0], hi[0])
-    ax.set_ylim(lo[1], hi[1])
-    ax.set_zlim(lo[2], hi[2])
+        loops = [np.vstack((pts[face], pts[face[0]])) for face in faces]
+        width = (layer.get("kwargs") or {}).get("line_width", 0.8)
+        ax.add_collection3d(Line3DCollection(loops, colors=color or "black", linewidths=width))
+    ax.auto_scale_xyz(pts[:, 0], pts[:, 1], pts[:, 2], had_data=had_data)
+
+
+def _mpl_color(color):
+    """matplotlib wants 0-1 tuples; PyVista also takes 0-255 ones like ``(0, 0, 255)``."""
+    if isinstance(color, (tuple, list, np.ndarray)) and len(color) in (3, 4):
+        values = np.asarray(color, dtype=float)
+        if values.max(initial=0) > 1.0:
+            values = values / 255.0
+        return tuple(values)
+    return color
 
 
 def _scatter_layer(ax, layer):
     pts, colors = coerce_cloud(layer["points"], layer["colors"])
     size = layer["point_size"]
     if colors is None:
-        ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=layer["color"] or "silver", s=size)
+        ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], color=_mpl_color(layer["color"]) or "silver", s=size)
         return
     col = np.asarray(colors)
     if col.ndim == 2 and col.shape[1] == 3:
@@ -946,12 +955,18 @@ class FigureManager:
         return cloud
 
     def plot_mesh(self, row, col, points, faces=None, color=None, colors=None, style="surface", hold=True, **kwargs):
-        """Draw a triangle mesh. ``style`` is ``surface``, ``wireframe``, or ``both``.
+        """Draw a triangle or quad mesh. ``style`` is ``surface``, ``wireframe``, or ``both``.
 
         With ``faces`` omitted, ``points`` is a mesh such as ``load_ply(...)``.
         """
         cloud = self.figure3(row, col)
         cloud.plot_mesh(points, faces, color=color, colors=colors, style=style, hold=hold, **kwargs)
+        return cloud
+
+    def plot_box(self, row, col, box, color="blue", style="wireframe", line_width=1.5, hold=True, **kwargs):
+        """Draw a 3D box from 8 corners or 6 bounds ``(xmin, xmax, ymin, ymax, zmin, zmax)``."""
+        cloud = self.figure3(row, col)
+        cloud.plot_box(box, color=color, style=style, line_width=line_width, hold=hold, **kwargs)
         return cloud
 
     def view3(self, row, col, which="xy"):

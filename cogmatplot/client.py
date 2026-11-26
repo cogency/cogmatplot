@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import time
 
+import numpy as np
 import zmq
 
 from cogmatplot.api import METHODS, STREAM_METHODS
@@ -88,6 +89,10 @@ class RemoteCloud:
         )
         return self
 
+    def plot_box(self, box, **kwargs):
+        self._client.plot_box(self.row, self.col, box, **kwargs)
+        return self
+
 
 class PlotClient:
     """Debugger-side handle. Construct with ``FigureManager.connect`` too."""
@@ -140,6 +145,10 @@ class PlotClient:
     def plot_mesh(self, row, col, points, faces=None, colors=None, **kwargs):
         points, faces, colors = _mesh_arrays(points, faces, colors)
         self._call("plot_mesh", row, col, points, faces, colors=colors, **kwargs)
+        return RemoteCloud(self, row, col)
+
+    def plot_box(self, row, col, box, **kwargs):
+        self._call("plot_box", row, col, np.asarray(box, dtype=float), **kwargs)
         return RemoteCloud(self, row, col)
 
     def close_all(self, rows=None, cols=None, mon=None):

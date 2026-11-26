@@ -101,16 +101,23 @@ def mesh_parts(points, faces=None, colors=None):
     return ply.points, ply.faces, ply.colors if colors is None else colors
 
 
+def mesh_faces(faces):
+    """Faces as an ``(M, 3)`` triangle or ``(M, 4)`` quad index array."""
+    arr = np.asarray(faces, dtype=np.int64)
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        raise ValueError("faces must have shape (M, 3) or (M, 4)")
+    if arr.shape[1] > 4 or (arr.shape[1] == 4 and np.any(arr[:, 3] < 0)):
+        return arr[:, :3]
+    return arr
+
+
 def add_mesh(plotter, points, faces, color=None, colors=None, style="surface", **kwargs):
-    """Draw triangle faces. ``style`` is ``surface``, ``wireframe``, or ``both``."""
+    """Draw triangle or quad faces. ``style`` is ``surface``, ``wireframe``, or ``both``."""
     import pyvista as pv
 
     pts = np.asarray(points, dtype=float)
-    tris = np.asarray(faces, dtype=np.int64)
-    if tris.ndim != 2 or tris.shape[1] < 3:
-        raise ValueError("faces must have shape (M, 3)")
-    tris = tris[:, :3]
-    packed = np.hstack([np.full((len(tris), 1), 3, dtype=np.int64), tris]).ravel()
+    polys = mesh_faces(faces)
+    packed = np.hstack([np.full((len(polys), 1), polys.shape[1], dtype=np.int64), polys]).ravel()
     poly = pv.PolyData(np.ascontiguousarray(pts), packed)
     style = str(style or "surface").lower()
     if style == "wireframe":
@@ -251,8 +258,17 @@ class Fig3d:
         self._notify()
         return self
 
+    def plot_box(self, box, color="blue", style="wireframe", line_width=1.5, hold=True, **kwargs):
+        """Add a box from 8 corners or 6 bounds; see :mod:`cogmatplot.box3`."""
+        from cogmatplot.box3 import box_mesh
+
+        mesh = box_mesh(box)
+        return self.plot_mesh(
+            mesh.points, mesh.faces, color=color, style=style, hold=hold, line_width=line_width, **kwargs,
+        )
+
     def plot_mesh(self, points, faces=None, color=None, colors=None, style="surface", hold=True, **kwargs):
-        """Add a triangle mesh. ``style`` is ``surface``, ``wireframe``, or ``both``.
+        """Add a triangle or quad mesh. ``style`` is ``surface``, ``wireframe``, or ``both``.
 
         With ``faces`` omitted, ``points`` is a mesh such as ``load_ply(...)``.
         """
