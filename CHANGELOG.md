@@ -8,7 +8,8 @@
 - `plot3`, `scatter3`, and `plot_mesh` accept a whole cloud or mesh structure.
 - `FigureManager.subplot(row, col)` returns a tile's matplotlib axes.
 - `cogmatplot.__version__`.
-- Test workflow on Windows for Python 3.10, 3.12, and 3.13; publishing runs it first.
+- Test workflow on Windows for Python 3.10, 3.12, and 3.13.
+- Pushing a version tag runs the tests, publishes to PyPI, and creates the GitHub release.
 - Project URLs and changelog link in the package metadata.
 
 ### Changed

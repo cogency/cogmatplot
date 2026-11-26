@@ -218,3 +218,14 @@ python -m unittest discover -s tests
 ## Changes
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+## Releasing
+
+Set `version` in `pyproject.toml`, add a matching `## [X.Y.Z]` section to `CHANGELOG.md`, commit, then push a tag with the same version:
+
+```bash
+git tag 0.3.0
+git push origin main 0.3.0
+```
+
+The tag runs the tests, publishes to PyPI, and creates the GitHub release from that changelog section. A tag that does not match `pyproject.toml` fails before anything is uploaded.
