@@ -69,6 +69,147 @@ def load_ply(path: PathLike) -> Ply:
     return Ply(points=points, colors=_colors(vertices, names), normals=_normals(vertices, names), faces=faces)
 
 
+def as_ply(cloud) -> Ply:
+    """Turn a cloud from another loader into a :class:`Ply`.
+
+    Accepts a path, a :class:`Ply`, an ``(N, 3)`` array, a structured array
+    or plyfile element with ``x/y/z`` fields, or any dict or object with
+    ``points``/``vertices`` or ``x, y, z``; ``colors`` or ``red, green, blue``;
+    ``normals`` or ``nx, ny, nz``; and ``faces``/``triangles``. That covers
+    ``abd3d_algo.load_cloud``, ``plyfile.PlyData`` and Open3D clouds. Colors
+    come back as ``uint8`` 0-255.
+    """
+    if isinstance(cloud, Ply):
+        return cloud
+    if isinstance(cloud, (str, Path)):
+        return load_ply(cloud)
+    if not isinstance(cloud, dict) and hasattr(cloud, "elements"):
+        names = [element.name for element in cloud.elements]
+        ply = _from_table(cloud["vertex"].data)
+        if "face" in names:
+            ply.faces = _faces(cloud["face"].data["vertex_indices"])
+        return ply
+    if getattr(getattr(cloud, "data", None), "dtype", None) is not None:
+        cloud = cloud.data
+    if isinstance(cloud, np.ndarray):
+        if cloud.dtype.names:
+            return _from_table(cloud)
+        pts = np.asarray(cloud, dtype=np.float64)
+        if pts.ndim != 2 or pts.shape[1] != 3:
+            raise ValueError("a plain array cloud must have shape (N, 3)")
+        return Ply(points=pts)
+
+    points = _first(cloud, "points", "vertices")
+    if points is None:
+        xyz = [_field(cloud, key) for key in ("x", "y", "z")]
+        if any(v is None for v in xyz):
+            raise ValueError("cloud needs points, vertices, or x, y, z")
+        points = np.column_stack(xyz)
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        raise ValueError("points must have shape (N, 3)")
+
+    colors = _first(cloud, "colors", "colours")
+    if colors is None:
+        colors = _stack(cloud, ("red", "green", "blue")) or _stack(cloud, ("diffuse_red", "diffuse_green", "diffuse_blue"))
+    normals = _first(cloud, "normals")
+    if normals is None:
+        normals = _stack(cloud, ("nx", "ny", "nz"))
+    return Ply(
+        points=pts,
+        colors=_cloud_colors(colors, len(pts)),
+        normals=_cloud_normals(normals, len(pts)),
+        faces=_faces(_first(cloud, "faces", "triangles")),
+    )
+
+
+def is_cloud(obj) -> bool:
+    """True for structures :func:`as_ply` reads; False for plain arrays and lists."""
+    if obj is None or isinstance(obj, (str, Path, list, tuple)):
+        return False
+    if isinstance(obj, np.ndarray):
+        return bool(obj.dtype.names)
+    if isinstance(obj, (Ply, dict)) or hasattr(obj, "elements"):
+        return True
+    data = getattr(obj, "data", None)
+    if getattr(getattr(data, "dtype", None), "names", None):
+        return True
+    return hasattr(obj, "points") or hasattr(obj, "vertices") or all(hasattr(obj, key) for key in ("x", "y", "z"))
+
+
+def _field(obj, key):
+    if isinstance(obj, np.ndarray):
+        return obj[key] if obj.dtype.names and key in obj.dtype.names else None
+    if isinstance(obj, dict):
+        return obj.get(key)
+    try:
+        return obj[key]
+    except (KeyError, IndexError, TypeError, ValueError):
+        pass
+    return getattr(obj, key, None)
+
+
+def _first(obj, *keys):
+    for key in keys:
+        value = _field(obj, key)
+        if value is not None:
+            return value
+    return None
+
+
+def _stack(obj, keys):
+    parts = [_field(obj, key) for key in keys]
+    if any(part is None for part in parts):
+        return None
+    return [np.asarray(part) for part in parts]
+
+
+def _from_table(table):
+    names = table.dtype.names
+    for key in ("x", "y", "z"):
+        if key not in names:
+            raise ValueError("structured cloud needs x, y, z fields")
+    points = np.column_stack([table["x"], table["y"], table["z"]]).astype(np.float64, copy=False)
+    return Ply(points=points, colors=_colors(table, names), normals=_normals(table, names))
+
+
+def _cloud_colors(colors, n):
+    if colors is None:
+        return None
+    col = np.column_stack(colors) if isinstance(colors, list) else np.asarray(colors)
+    if col.size == 0:
+        return None
+    if col.ndim == 2 and col.shape[0] == 3 and col.shape[1] == n and n != 3:
+        col = col.T
+    if col.shape != (n, 3):
+        return None
+    if col.dtype == np.uint8:
+        return col
+    return _as_u8(col, n)
+
+
+def _cloud_normals(normals, n):
+    if normals is None:
+        return None
+    nrm = np.column_stack(normals) if isinstance(normals, list) else np.asarray(normals)
+    if nrm.shape != (n, 3):
+        return None
+    return nrm.astype(np.float64, copy=False)
+
+
+def _faces(faces):
+    if faces is None:
+        return None
+    arr = np.asarray(faces)
+    if arr.dtype == object:
+        arr = np.array([np.asarray(face)[:3] for face in arr], dtype=np.int64)
+    if arr.size == 0:
+        return None
+    if arr.ndim != 2 or arr.shape[1] < 3:
+        return None
+    return arr[:, :3].astype(np.int64, copy=False)
+
+
 def save_ply(path: PathLike, points, colors=None, normals=None, faces=None) -> None:
     """Write a binary little-endian PLY file."""
     pts = np.asarray(points, dtype="<f4")
@@ -322,4 +463,4 @@ def _as_u8(colors, n):
         raise ValueError("colors must have shape (N, 3)")
     if col.dtype != np.uint8 and np.nanmax(col) <= 1.0:
         col = col * 255.0
-    return np.clip(col, 0, 255).astype(np.uint8)
+    return np.clip(np.rint(col), 0, 255).astype(np.uint8)

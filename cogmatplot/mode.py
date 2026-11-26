@@ -60,9 +60,29 @@ def use(mode: str = "auto") -> str:
 
         if mode == "qt":
             plt.ion()
+            _enable_qt_loop()
         else:
             plt.ioff()
     return mode
+
+
+def _enable_qt_loop():
+    """Run the Qt loop between cells, as ``%matplotlib qt`` does.
+
+    matplotlib only does this the first time it hooks into IPython, so a
+    kernel that started inline would otherwise leave Qt windows frozen.
+    """
+    try:
+        from IPython import get_ipython
+    except Exception:
+        return
+    shell = get_ipython()
+    if shell is None or getattr(shell, "active_eventloop", None) == "qt":
+        return
+    try:
+        shell.enable_gui("qt")
+    except Exception:
+        pass
 
 
 def current_mode() -> str:

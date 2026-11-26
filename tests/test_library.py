@@ -48,6 +48,9 @@ class TestPackage(unittest.TestCase):
         self.assertEqual(path, ROOT / "cogmatplot" / "__init__.py")
         self.assertNotIn("cog_matplot", str(path))
 
+    def test_version_is_set(self):
+        self.assertRegex(cogmatplot.__version__, r"^\d+\.\d+")
+
     def test_manager_has_remote_methods(self):
         missing = [name for name in METHODS if not hasattr(FigureManager, name)]
         self.assertEqual(missing, [])
@@ -323,11 +326,92 @@ class TestPly(unittest.TestCase):
                 fm.plot_mesh(1, 0, mesh.points, mesh.faces, style="surface", color="lightsteelblue")
                 fm.plot_mesh(1, 1, mesh.points, mesh.faces, style="both", color="lightsteelblue")
             self.assertNotIn("kind", fm._cells[(0, 0)].cloud.layers[0])
+            original = cloud.points
+            stored = fm._cells[(0, 0)].cloud.layers[0]["points"]
+            self.assertTrue(np.shares_memory(stored, original))
             for key, style in (((0, 1), "wireframe"), ((1, 0), "surface"), ((1, 1), "both")):
                 layer = fm._cells[key].cloud.layers[0]
                 self.assertEqual(layer["kind"], "mesh")
                 self.assertEqual(layer["style"], style)
                 self.assertEqual(fm._axes[key[0]][key[1]].name, "3d")
+        finally:
+            fm.closeAll()
+
+    def test_subplot_hands_out_tile_axes(self):
+        fm = FigureManager(2, 2, pause=False, mode="inline")
+        try:
+            axes = [[fm.subplot(r, c) for c in range(2)] for r in range(2)]
+            self.assertIs(axes[0][1], fm._axes[0][1])
+            axes[1][0].plot([0, 1], [1, 0])
+            self.assertEqual(len(fm._axes[1][0].lines), 1)
+            self.assertEqual(fm.subplot(1, 1, projection="3d").name, "3d")
+            fm.drawnow()
+        finally:
+            fm.closeAll()
+
+    def test_as_ply_reads_loader_structures(self):
+        from cogmatplot.ply import as_ply, is_cloud, load_ply
+
+        cloud = load_ply(ROOT / "examples" / "data" / "prism_cloud.ply")
+        n = len(cloud.points)
+        rgb = cloud.colors.astype(float)
+
+        class Struct(dict):
+            def __getattr__(self, key):
+                try:
+                    return self[key]
+                except KeyError as e:
+                    raise AttributeError(key) from e
+
+        abd = Struct(
+            vertices=cloud.points.copy(),
+            normals=np.zeros((n, 3)),
+            alpha=np.full(n, 255.0),
+            red=rgb[:, 0], green=rgb[:, 1], blue=rgb[:, 2],
+            curvature=np.zeros(n),
+        )
+        table = np.zeros(n, dtype=[("x", "<f4"), ("y", "<f4"), ("z", "<f4"),
+                                   ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+        for i, key in enumerate("xyz"):
+            table[key] = cloud.points[:, i]
+        for i, key in enumerate(("red", "green", "blue")):
+            table[key] = cloud.colors[:, i]
+        open3d_like = SimpleNamespace(points=cloud.points, colors=cloud.colors / 255.0)
+        xyz_dict = {"x": cloud.points[:, 0], "y": cloud.points[:, 1], "z": cloud.points[:, 2],
+                    "colors": cloud.colors}
+
+        for source in (abd, table, open3d_like, xyz_dict, cloud):
+            self.assertTrue(is_cloud(source))
+            ply = as_ply(source)
+            np.testing.assert_allclose(ply.points, cloud.points, atol=1e-4)
+            self.assertEqual(ply.colors.dtype, np.uint8)
+            np.testing.assert_array_equal(ply.colors, cloud.colors)
+        self.assertEqual(as_ply(abd).normals.shape, (n, 3))
+        self.assertFalse(is_cloud(cloud.points))
+        self.assertIsNone(as_ply(cloud.points).colors)
+
+        mesh = as_ply(load_ply(ROOT / "examples" / "data" / "prism_mesh.ply"))
+        self.assertEqual(mesh.faces.shape, (12, 3))
+
+    def test_plot3_and_plot_mesh_take_whole_structures(self):
+        from cogmatplot.ply import load_ply
+
+        cloud = load_ply(ROOT / "examples" / "data" / "prism_cloud.ply")
+        mesh = load_ply(ROOT / "examples" / "data" / "prism_mesh.ply")
+        abd = {"vertices": cloud.points, "red": cloud.colors[:, 0].astype(float),
+               "green": cloud.colors[:, 1].astype(float), "blue": cloud.colors[:, 2].astype(float)}
+        fm = FigureManager(1, 2, pause=False, mode="inline")
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                fm.plot3(0, 0, abd, point_size=4)
+                fm.plot_mesh(0, 1, mesh, style="both")
+            pts, colors = coerce_cloud(fm._cells[(0, 0)].cloud.layers[0]["points"])
+            np.testing.assert_array_equal(colors, cloud.colors)
+            self.assertEqual(len(pts), len(cloud.points))
+            layer = fm._cells[(0, 1)].cloud.layers[0]
+            self.assertEqual(layer["kind"], "mesh")
+            self.assertEqual(np.asarray(layer["faces"]).shape, (12, 3))
         finally:
             fm.closeAll()
 
@@ -390,6 +474,49 @@ class TestServer(unittest.TestCase):
             linked = FigureManager.connect("127.0.0.1", port)
             self.assertIsInstance(linked, PlotClient)
             linked.close()
+        finally:
+            client.close()
+            stop.set()
+            thread.join(2)
+            fm.closeAll()
+
+    def test_client_sends_cloud_structures_as_arrays(self):
+        from threading import Event, Thread
+
+        from cogmatplot.client import PlotClient
+        from cogmatplot.ply import load_ply
+        from cogmatplot.server import run_server
+
+        cloud = load_ply(ROOT / "examples" / "data" / "prism_cloud.ply")
+        mesh = load_ply(ROOT / "examples" / "data" / "prism_mesh.ply")
+        rgb = cloud.colors.astype(float)
+        abd = {"vertices": cloud.points, "red": rgb[:, 0], "green": rgb[:, 1], "blue": rgb[:, 2]}
+
+        fm = FigureManager(1, 2, pause=False, mode="inline")
+        port = _free_port()
+        stop = Event()
+        ready = Event()
+        thread = Thread(target=run_server, args=(fm, port, stop), kwargs={"ready": ready}, daemon=True)
+        thread.start()
+        self.assertTrue(ready.wait(3), "server did not bind")
+        client = PlotClient("127.0.0.1", port)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", RuntimeWarning)
+                client.plot3(0, 0, abd, point_size=4)
+                client.plot_mesh(0, 1, mesh, style="wireframe")
+                cells = {}
+                for _ in range(80):
+                    cells = {key: fm._cells.get(key) for key in ((0, 0), (0, 1))}
+                    if all(cell is not None and cell.cloud is not None and cell.cloud.layers for cell in cells.values()):
+                        break
+                    stop.wait(0.05)
+            points_layer = cells[(0, 0)].cloud.layers[0]
+            self.assertIsInstance(points_layer["points"], np.ndarray)
+            np.testing.assert_allclose(points_layer["points"], cloud.points)
+            np.testing.assert_array_equal(points_layer["colors"], cloud.colors)
+            mesh_layer = cells[(0, 1)].cloud.layers[0]
+            self.assertEqual(np.asarray(mesh_layer["faces"]).shape, (12, 3))
         finally:
             client.close()
             stop.set()

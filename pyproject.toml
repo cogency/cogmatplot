@@ -1,14 +1,15 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "cogmatplot"
-version = "0.1.0"
+version = "0.2.0"
 description = "MATLAB-style 2D and 3D figures, inline or on another monitor"
 readme = "README.md"
-requires-python = ">=3.9"
-license = { text = "MIT" }
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Cogency", email = "mathew@cogency.co.za" }]
 dependencies = [
     "numpy",
@@ -18,8 +19,14 @@ dependencies = [
     "opencv-python",
     "PyQt5",
     "pyvista",
-    "pyvistaqt",
+    "pyvistaqt<0.13",
 ]
+
+[project.urls]
+Homepage = "https://github.com/cogency/cogmatplot"
+Repository = "https://github.com/cogency/cogmatplot"
+Issues = "https://github.com/cogency/cogmatplot/issues"
+Changelog = "https://github.com/cogency/cogmatplot/blob/main/CHANGELOG.md"
 
 [project.scripts]
 cogmatplot-server = "cogmatplot.server:main"

@@ -28,6 +28,7 @@ from matplotlib.patches import Rectangle
 from cogmatplot.images import prepare_bgr
 from cogmatplot.layout import gridfig_box
 from cogmatplot.mode import current_mode
+from cogmatplot.ply import is_cloud
 from cogmatplot.view3 import coerce_cloud
 
 _MANAGERS = weakref.WeakSet()
@@ -184,11 +185,24 @@ def _pump_cv():
         manager._emit(event)
 
 
+def _in_kernel():
+    try:
+        from IPython import get_ipython
+    except Exception:
+        return False
+    shell = get_ipython()
+    return shell is not None and getattr(shell, "kernel", None) is not None
+
+
 def _pump_qt():
     if not any(getattr(manager, "mode", "") == "qt" for manager in list(_MANAGERS)):
         return
+    # A kernel already runs the Qt loop between cells; processEvents from
+    # inside a cell can block forever there.
+    if _in_kernel():
+        return
     try:
-        from PyQt5.QtWidgets import QApplication
+        from qtpy.QtWidgets import QApplication
     except Exception:
         return
     app = QApplication.instance()
@@ -302,16 +316,43 @@ class Cell:
 
 
 def _plot3_points(x, y, z, fmt, colors):
-    """Return an ``(N, 3)`` cloud when this ``plot3`` call is markers, not a line."""
+    """Return an ``(N, 3)`` cloud when this ``plot3`` call is markers, not a line.
+
+    ``x, y, z = points.T`` is handed through as ``points`` with no extra copy,
+    so the PyVista call matches ``Fig3d.pl.add_points``.
+    """
     if y is None and z is None:
+        if is_cloud(x):
+            return x
         arr = np.asarray(x)
         if getattr(arr, "ndim", 0) == 2 and arr.shape[1] == 3:
             return arr
         return None
     marker = isinstance(fmt, str) and "-" not in fmt and any(ch in fmt for ch in ".o+x*sd^v<>")
     if marker or colors is not None:
-        return np.column_stack((np.ravel(np.asarray(x)), np.ravel(np.asarray(y)), np.ravel(np.asarray(z))))
+        return _xyz_from_columns(x, y, z)
     return None
+
+
+def _xyz_from_columns(x, y, z):
+    x = np.asarray(x)
+    y = np.asarray(y)
+    z = np.asarray(z)
+    if x.ndim == 1 and x.shape == y.shape == z.shape and x.size and y.base is x.base is z.base:
+        parent = x.base if isinstance(x.base, np.ndarray) else None
+        if parent is not None and parent.flags.c_contiguous:
+            item = parent.dtype.itemsize
+            start = parent.ctypes.data
+            columns = (
+                x.ctypes.data == start
+                and y.ctypes.data == start + item
+                and z.ctypes.data == start + 2 * item
+            )
+            if columns and parent.ndim == 2 and parent.shape == (x.size, 3):
+                return parent
+            if columns and parent.ndim == 1 and parent.size == x.size * 3:
+                return parent.reshape(x.size, 3)
+    return np.column_stack((np.ravel(x), np.ravel(y), np.ravel(z)))
 
 
 def _draw_mpl_layer(ax, layer):
@@ -532,6 +573,14 @@ class FigureManager:
 
     def _mpl3d(self, row, col):
         return self._mpl(row, col, "3d")
+
+    def subplot(self, row, col, projection=None):
+        """MATLAB ``subplot``: the matplotlib axes of one tile.
+
+        Hand it to code that draws on its own axes, then call ``drawnow``.
+        ``projection="3d"`` gives a 3D axes. A cv or PyVista tile is replaced.
+        """
+        return self._mpl(row, col, projection).ax
 
     def _require_ax(self, row, col):
         """Axes for titles and limits, without flipping 2D/3D."""
@@ -833,8 +882,12 @@ class FigureManager:
         """MATLAB ``plot3(X, Y, Z)`` and ``plot3(X, Y, Z, LineSpec)``.
 
         A line spec such as ``'-'`` or ``'.-'`` draws a 3D line. A marker spec
-        such as ``'.'``, or an ``(N, 3)`` point array, draws a point cloud.
-        ``colors`` is per-point rgb.
+        such as ``'.'``, or an ``(N, 3)`` point array, draws a point cloud with
+        the same PyVista ``add_points`` call as ``Fig3d.pl``. ``colors`` is
+        passed through as ``scalars`` with ``rgb=True``.
+
+        ``x`` may also be a whole cloud, for example ``plot3(0, 0, cloud)``
+        with ``abd3d_algo.load_cloud`` output; see :func:`cogmatplot.ply.as_ply`.
         """
         kwargs.pop("flush", None)
         if isinstance(y, str) and z is None:
@@ -892,8 +945,11 @@ class FigureManager:
         cloud.scatter3(points, color=color, colors=colors, point_size=point_size, cmap=cmap, hold=hold, **kwargs)
         return cloud
 
-    def plot_mesh(self, row, col, points, faces, color=None, colors=None, style="surface", hold=True, **kwargs):
-        """Draw a triangle mesh. ``style`` is ``surface``, ``wireframe``, or ``both``."""
+    def plot_mesh(self, row, col, points, faces=None, color=None, colors=None, style="surface", hold=True, **kwargs):
+        """Draw a triangle mesh. ``style`` is ``surface``, ``wireframe``, or ``both``.
+
+        With ``faces`` omitted, ``points`` is a mesh such as ``load_ply(...)``.
+        """
         cloud = self.figure3(row, col)
         cloud.plot_mesh(points, faces, color=color, colors=colors, style=style, hold=hold, **kwargs)
         return cloud

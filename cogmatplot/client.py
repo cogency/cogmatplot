@@ -11,7 +11,23 @@ import time
 import zmq
 
 from cogmatplot.api import METHODS, STREAM_METHODS
+from cogmatplot.ply import as_ply, is_cloud
 from cogmatplot.wire import encode
+
+
+def _cloud_arrays(points, colors):
+    """Send plain arrays, not loader structures the server may not import."""
+    if not is_cloud(points):
+        return points, colors
+    ply = as_ply(points)
+    return ply.points, ply.colors if colors is None else colors
+
+
+def _mesh_arrays(points, faces, colors):
+    if faces is not None:
+        return points, faces, colors
+    ply = as_ply(points)
+    return ply.points, ply.faces, ply.colors if colors is None else colors
 
 
 def _remote(name):
@@ -65,7 +81,7 @@ class RemoteCloud:
         self._client.clear3(self.row, self.col)
         return self
 
-    def plot_mesh(self, points, faces, color=None, colors=None, style="surface", hold=True, **kwargs):
+    def plot_mesh(self, points, faces=None, color=None, colors=None, style="surface", hold=True, **kwargs):
         self._client.plot_mesh(
             self.row, self.col, points, faces,
             color=color, colors=colors, style=style, hold=hold, **kwargs,
@@ -109,6 +125,21 @@ class PlotClient:
 
     def figure3(self, row, col, title="Fig3d", **kwargs):
         self._call("figure3", row, col, title=title, **kwargs)
+        return RemoteCloud(self, row, col)
+
+    def scatter3(self, row, col, points, color=None, colors=None, **kwargs):
+        points, colors = _cloud_arrays(points, colors)
+        self._call("scatter3", row, col, points, color=color, colors=colors, **kwargs)
+        return RemoteCloud(self, row, col)
+
+    def plot3(self, row, col, x, y=None, z=None, fmt=".-", colors=None, **kwargs):
+        if z is None and (y is None or isinstance(y, str)):
+            x, colors = _cloud_arrays(x, colors)
+        self._call("plot3", row, col, x, y, z, fmt, colors=colors, **kwargs)
+
+    def plot_mesh(self, row, col, points, faces=None, colors=None, **kwargs):
+        points, faces, colors = _mesh_arrays(points, faces, colors)
+        self._call("plot_mesh", row, col, points, faces, colors=colors, **kwargs)
         return RemoteCloud(self, row, col)
 
     def close_all(self, rows=None, cols=None, mon=None):

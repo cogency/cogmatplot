@@ -1,7 +1,6 @@
 # %% Interactive pop-out figures.
 # Run in the interactive window. Windows are live: pan, zoom, orbit.
-# If this kernel was previously inline, switch first:
-# %matplotlib qt
+# use("qt") switches an inline kernel too; no %matplotlib qt needed.
 
 import cogmatplot
 

@@ -9,9 +9,17 @@ Pick the display before importing the plotting classes when you can::
 ``FigureManager`` is loaded lazily so ``use`` can select the backend first.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from cogmatplot.mode import current_mode, use
 
+try:
+    __version__ = version("cogmatplot")
+except PackageNotFoundError:
+    __version__ = "0+unknown"
+
 __all__ = [
+    "__version__",
     "use",
     "current_mode",
     "FigureManager",
@@ -22,6 +30,7 @@ __all__ = [
     "Ply",
     "load_ply",
     "save_ply",
+    "as_ply",
     "rectangular_prism",
 ]
 
@@ -39,7 +48,7 @@ def __getattr__(name):
         from cogmatplot.client import PlotClient
 
         return PlotClient
-    if name in ("Ply", "load_ply", "save_ply", "rectangular_prism"):
+    if name in ("Ply", "load_ply", "save_ply", "as_ply", "rectangular_prism"):
         from cogmatplot import ply
 
         return getattr(ply, name)

@@ -26,7 +26,7 @@ or `pip install -r requirements.txt`. That installs the viewers with the library
 | --- | --- |
 | `numpy`, `matplotlib` | 2D plots, images, and inline figures |
 | `PyQt5` | Pop-out windows on a monitor |
-| `pyvista`, `pyvistaqt` | Interactive 3D points and meshes |
+| `pyvista`, `pyvistaqt<0.13` | Interactive 3D points and meshes. pyvistaqt 0.13 and later hang on Windows when the window is on a secondary monitor |
 | `opencv-python` | Fast live image tiles |
 | `screeninfo` | Which monitor a tile lands on |
 | `pyzmq` | The debug server |
@@ -61,10 +61,8 @@ Open `examples/notebook_inline.ipynb` for the same idea with a 3D line and a poi
 ### Interactive windows on a monitor
 
 ```python
-%matplotlib qt
-
 import cogmatplot
-cogmatplot.use("qt")
+cogmatplot.use("qt")  # also turns on the notebook's Qt event loop; no %matplotlib qt needed
 from cogmatplot import FigureManager, closeAll
 
 MON = 0  # screen index
@@ -105,13 +103,22 @@ cloud.view_xy()
 fm.drawnow()
 ```
 
-`colors` can be `uint8` or float `0–1`. A single `color` such as `"silver"` or `"red"` paints the whole cloud. An object with `.points` and `.colors` (for example an Open3D cloud) is accepted.
+`colors` can be `uint8` or float `0–1`. A single `color` such as `"silver"` or `"red"` paints the whole cloud. Whole cloud structures (Open3D, plyfile, `vertices` plus `red/green/blue`) are accepted too; see `as_ply` under [PLY point clouds and meshes](#ply-point-clouds-and-meshes).
 
 `hold on` adds another series. The next `plot` without hold updates the current line in place.
 
-Names follow MATLAB: `plot`, `plot3`, `imshow`, `imagesc`, `hold`, `axis`, `grid`, `title`, `xlabel`, `ylabel`, `xlim`, `ylim`, `zlim`, `legend`, `colorbar`, `text`, `rectangle`, `clf`, `cla`, `closeAll`, `drawnow`.
+Names follow MATLAB: `plot`, `plot3`, `imshow`, `imagesc`, `hold`, `axis`, `grid`, `title`, `xlabel`, `ylabel`, `xlim`, `ylim`, `zlim`, `legend`, `colorbar`, `text`, `box`, `rectangle`, `subplot`, `clf`, `cla`, `closeAll`, `drawnow`.
 
 In-process, `imshow` and `plot` also return the matplotlib axes, so `ax.plot(...)` still works. Over the server, use the `FigureManager` methods above. They do the same thing.
+
+`fm.subplot(row, col)` hands out a tile's matplotlib axes (`projection="3d"` for a 3D one). Pass them to code that draws on axes it is given, then call `drawnow`:
+
+```python
+axes = [[fm.subplot(0, 0), fm.subplot(0, 1)],
+        [fm.subplot(1, 0), fm.subplot(1, 1)]]
+make_report(results, axes=axes)   # your own plotting function
+fm.drawnow()
+```
 
 ## Fast image streams
 
@@ -157,6 +164,17 @@ fm.plot_mesh(1, 1, mesh.points, mesh.faces, style="both", color="lightsteelblue"
 
 `load_ply` only reads the file. It returns `.points`, `.colors`, `.normals`, and `.faces`. `plot3` is the MATLAB call: `plot3(x, y, z, '-')` is a 3D line, and `plot3(x, y, z, '.')` is a point cloud. `plot_mesh` draws faces. `style` is `surface` (shaded), `wireframe`, or `both`. `rectangular_prism()` builds the same box in memory, and `save_ply` writes it back out.
 
+Clouds from other loaders work too. `as_ply` reads anything with `points` or `vertices` (or `x, y, z`), `colors` (or `red, green, blue`), `normals` (or `nx, ny, nz`), and `faces`: a plyfile `PlyData`, a structured array, an Open3D cloud, or a dict. Colors come back as `uint8`. `plot3` and `plot_mesh` take such a structure whole:
+
+```python
+from cogmatplot.ply import as_ply
+
+cloud = load_cloud(ply_file)       # any loader, e.g. vertices + red/green/blue
+fm.plot3(0, 0, cloud)              # colors are picked up from the structure
+ply = as_ply(cloud)                # or convert once: ply.points, ply.colors, ply.normals
+fm.plot_mesh(0, 1, load_ply(data / "prism_mesh.ply"), style="both")
+```
+
 `examples/ply_prism.py` loads the two sample files.
 
 ## Server
@@ -196,3 +214,7 @@ draw(fm)
 ```bash
 python -m unittest discover -s tests
 ```
+
+## Changes
+
+See [CHANGELOG.md](CHANGELOG.md).

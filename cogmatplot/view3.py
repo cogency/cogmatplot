@@ -28,16 +28,18 @@ _VIEWS = {
 
 
 def coerce_cloud(points, colors=None):
-    """Return ``(pts Nx3 float, colors or None)``."""
-    if hasattr(points, "points"):
-        raw = points
-        pts = np.asarray(raw.points)
+    """Return ``(pts Nx3 float, colors or None)``.
+
+    ``points`` may also be any cloud :func:`cogmatplot.ply.as_ply` reads; its
+    own colors are used when ``colors`` is not given.
+    """
+    from cogmatplot.ply import as_ply, is_cloud
+
+    if is_cloud(points):
+        ply = as_ply(points)
+        pts = ply.points
         if colors is None:
-            raw_colors = getattr(raw, "colors", None)
-            if raw_colors is not None:
-                raw_colors = np.asarray(raw_colors)
-                if getattr(raw_colors, "size", 0):
-                    colors = raw_colors
+            colors = ply.colors
     else:
         pts = np.asarray(points, dtype=float)
 
@@ -47,6 +49,8 @@ def coerce_cloud(points, colors=None):
         pts = pts.T
     if pts.shape[1] != 3:
         raise ValueError("point cloud must have shape (N, 3)")
+    if not (pts.flags.c_contiguous and pts.dtype.kind == "f"):
+        pts = np.ascontiguousarray(pts, dtype=np.float32 if pts.dtype.kind != "f" else pts.dtype)
 
     if colors is not None:
         colors = np.asarray(colors)
@@ -59,29 +63,42 @@ def coerce_cloud(points, colors=None):
             and colors.shape[1] != 3
         ):
             colors = colors.T
-    return np.ascontiguousarray(pts, dtype=float), colors
+    return pts, colors
 
 
 def add_cloud(plotter, points, color=None, colors=None, point_size=3, cmap=None, **kwargs):
-    """Add one xyz or xyz+rgb cloud to a PyVista plotter."""
+    """Add one cloud with ``Plotter.add_points``, same as ``Fig3d.pl.add_points``."""
     pts, colors = coerce_cloud(points, colors)
     point_size = kwargs.pop("point_size", point_size)
+    kwargs.setdefault("reset_camera", False)
     if colors is None:
         plotter.add_points(pts, color=color or "silver", point_size=point_size, **kwargs)
         return
     col = np.asarray(colors)
+    if col.ndim == 2 and col.shape[0] == 3 and col.shape[1] == len(pts) and col.shape[1] != 3:
+        col = col.T
     if col.ndim == 2 and col.shape[1] == 3:
-        rgb = col.astype(np.float64)
-        peak = np.nanmax(rgb) if rgb.size else 0
-        if peak > 1.0:
-            rgb = rgb / 255.0
-        plotter.add_points(pts, scalars=np.ascontiguousarray(rgb), rgb=True, point_size=point_size, **kwargs)
+        if not col.flags.c_contiguous:
+            col = np.ascontiguousarray(col)
+        plotter.add_points(pts, scalars=col, rgb=True, point_size=point_size, **kwargs)
         return
     scalars = np.ascontiguousarray(col).reshape(-1)
     if cmap is None:
         plotter.add_points(pts, scalars=scalars, point_size=point_size, **kwargs)
     else:
         plotter.add_points(pts, scalars=scalars, cmap=cmap, point_size=point_size, **kwargs)
+
+
+def mesh_parts(points, faces=None, colors=None):
+    """Return ``(points, faces, colors)``, reading a mesh structure when ``faces`` is None."""
+    if faces is not None:
+        return points, faces, colors
+    from cogmatplot.ply import as_ply
+
+    ply = as_ply(points)
+    if ply.faces is None:
+        raise ValueError("plot_mesh needs faces; this cloud has none")
+    return ply.points, ply.faces, ply.colors if colors is None else colors
 
 
 def add_mesh(plotter, points, faces, color=None, colors=None, style="surface", **kwargs):
@@ -176,11 +193,10 @@ class Fig3d:
         self._pl.set_background("white")
         if axes:
             self._pl.show_axes()
-        if grid:
-            self.grid(True)
+        if grid and self._grid:
+            self._pl.show_grid()
+            self._grid_shown = True
         self._pl.show()
-        if self._grid_pos is not None:
-            self.place_in_grid(*self._grid_pos)
         return self
 
     def close(self):
@@ -196,7 +212,8 @@ class Fig3d:
         self._grid_shown = False
         if self._pl is not None:
             self._pl.clear()
-            self._style_qt()
+            self._pl.set_background("white")
+            self._pl.show_axes()
         self._notify()
         return self
 
@@ -217,7 +234,8 @@ class Fig3d:
             self._grid_shown = False
             if self._pl is not None:
                 self._pl.clear()
-                self._style_qt()
+                self._pl.set_background("white")
+                self._pl.show_axes()
         layer = {
             "points": points,
             "color": color,
@@ -229,17 +247,23 @@ class Fig3d:
         self._layers.append(layer)
         if self._pl is not None:
             self._draw_layer(self._pl, layer)
+            self._refit(first=len(self._layers) == 1)
         self._notify()
         return self
 
-    def plot_mesh(self, points, faces, color=None, colors=None, style="surface", hold=True, **kwargs):
-        """Add a triangle mesh. ``style`` is ``surface``, ``wireframe``, or ``both``."""
+    def plot_mesh(self, points, faces=None, color=None, colors=None, style="surface", hold=True, **kwargs):
+        """Add a triangle mesh. ``style`` is ``surface``, ``wireframe``, or ``both``.
+
+        With ``faces`` omitted, ``points`` is a mesh such as ``load_ply(...)``.
+        """
+        points, faces, colors = mesh_parts(points, faces, colors)
         if not hold:
             self._layers = []
             self._grid_shown = False
             if self._pl is not None:
                 self._pl.clear()
-                self._style_qt()
+                self._pl.set_background("white")
+                self._pl.show_axes()
         layer = {
             "kind": "mesh",
             "points": points,
@@ -252,6 +276,7 @@ class Fig3d:
         self._layers.append(layer)
         if self._pl is not None:
             self._draw_layer(self._pl, layer)
+            self._refit(first=len(self._layers) == 1)
         self._notify()
         return self
 
@@ -305,22 +330,21 @@ class Fig3d:
     def _open_qt(self):
         from pyvistaqt import BackgroundPlotter
 
+        # Painting is left to auto_update and the kernel's Qt loop. Calling
+        # processEvents from inside a notebook cell can block forever.
         self._pl = BackgroundPlotter(title=self.title or "Fig3d", auto_update=True)
         if self._grid_pos is not None:
             self.place_in_grid(*self._grid_pos)
-        self._style_qt()
         for layer in self._layers:
             self._draw_layer(self._pl, layer)
 
-    def _style_qt(self):
-        if self._pl is None:
-            return
-        self._pl.set_background("white")
-        self._pl.show_axes()
-        if self._grid and not self._grid_shown:
+    def _refit(self, first):
+        """Stretch the grid over the new data and frame the first layer."""
+        if self._grid:
             self._pl.show_grid()
             self._grid_shown = True
-        self._apply_view(self._pl)
+        if first:
+            self._apply_view(self._pl)
 
     def _draw_layer(self, plotter, layer):
         if layer.get("kind") == "mesh":

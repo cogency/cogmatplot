@@ -5,4 +5,4 @@ screeninfo
 opencv-python
 PyQt5
 pyvista
-pyvistaqt
+pyvistaqt<0.13
